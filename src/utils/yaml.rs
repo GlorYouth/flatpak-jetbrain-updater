@@ -57,8 +57,6 @@ pub async fn update_yaml(
     }
     x86_64["sha256"] = serde_yaml::Value::String(_res.clone());
 
-    print!("{:?}",collection[0]);
-
     if let Some(aarch64) = platforms
         .iter_mut()
         .find(|v| v["only-arches"].as_sequence().unwrap()[0].eq("aarch64"))

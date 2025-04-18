@@ -1,11 +1,3 @@
-enum JetbrainsProduct {
-    CLion,
-    RustRover,
-    WebStorm,
-    GoLand,
-    PyCharm,
-}
-
 pub struct ProductInfo {
     name: String,
     lowercase: String,

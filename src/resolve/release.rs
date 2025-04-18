@@ -37,6 +37,7 @@ pub struct RE {
 }
 
 impl Default for RE {
+    #[inline]
     fn default() -> RE {
         RE {
             re: Arc::new(Regex::new("^[A-Za-z0-9]+").unwrap()),

@@ -12,6 +12,7 @@ trait XMLWriter {
 }
 
 impl XMLWriter for ProductRelease<'_> {
+    #[inline]
     fn write_xml(&self, writer: &mut Writer<Cursor<Vec<u8>>>) {
         writer
             .create_element("release")
@@ -21,18 +22,21 @@ impl XMLWriter for ProductRelease<'_> {
             .unwrap();
     }
 
+    #[inline]
     fn date(&self) -> &str {
         &self.date
     }
 }
 
 impl XMLWriter for (String, Vec<Event<'_>>) {
+    #[inline]
     fn write_xml(&self, writer: &mut Writer<Cursor<Vec<u8>>>) {
         for event in self.1.iter() {
             writer.write_event(event.clone()).unwrap();
         }
     }
 
+    #[inline]
     fn date(&self) -> &str {
         self.0.as_str()
     }
