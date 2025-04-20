@@ -77,7 +77,9 @@ macro_rules! handle_read_event_err {
 
 impl<'a, 'b, 'c> XMLHandler<'a, 'b, 'c> {
     fn handle_end_of_releases(&mut self, e: BytesEnd) -> error::Result<()> {
-        self.writer.write_bom().with_whatever_context(failed_to_write_event)?;
+        self.writer
+            .write_bom()
+            .with_whatever_context(failed_to_write_event)?;
 
         // vec保留exits(已在xml中出现的)中未出现的
         self.vec
@@ -106,16 +108,11 @@ impl<'a, 'b, 'c> XMLHandler<'a, 'b, 'c> {
         ) -> error::Result<(bool, Cow<'a, [u8]>)> {
             let value = attr
                 .find_map(|x| {
-                    match x.with_whatever_context(|e| format!("Failed to prase release tag's attribute, source: {:?}", e)) { 
-                        Ok(v) => { 
-                            if v.key.0.eq(b"date") {
-                                Some(Ok(v.value))
-                            } else { 
-                                None
-                            }
-                        },
-                        Err(e) => Some(Err(e)),
-                    }
+                    x.with_whatever_context(|e| {
+                        format!("Failed to parse release tag's attribute, source: {:?}", e)
+                    })
+                    .map(|attr| attr.key.0.eq(b"date").then_some(attr.value))
+                    .transpose()
                 })
                 .whatever_context("Failed to find date attribute in release tag")??;
 
@@ -130,7 +127,10 @@ impl<'a, 'b, 'c> XMLHandler<'a, 'b, 'c> {
                 Ok(Event::End(e)) if e.name().as_ref() == b"releases" => {
                     return self.handle_end_of_releases(e);
                 }
-                Ok(Event::Eof) => whatever!(r#"Unexpected EOF found in releases tag while parsing XML in XMLWriter "{}""#,self.path),
+                Ok(Event::Eof) => whatever!(
+                    r#"Unexpected EOF found in releases tag while parsing XML in XMLWriter "{}""#,
+                    self.path
+                ),
                 Ok(Event::Start(e)) if e.name().as_ref() == b"release" => {
                     is_skip_release = false;
                     let (is_exist, value) = search_date(e.attributes(), self.vec)?;
