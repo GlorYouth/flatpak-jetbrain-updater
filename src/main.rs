@@ -35,12 +35,12 @@ async fn main() -> error::Result<()> {
         .with_whatever_context(|| {
             format!(r#"Failed to find "{}" in JSON top"#, product_info.code())
         })?;
-    let mut collection = read_json(array);
+    let mut collection = read_json(array)?;
 
     let xml_path = format!("com.jetbrains.{}.appdata.xml", product_info.name());
     update_xml(xml_path, &mut collection)?;
 
     let yaml_path = format!("com.jetbrains.{}.yaml", product_info.name());
-    update_yaml(yaml_path, &product_info, &mut collection).await;
+    update_yaml(yaml_path, &product_info, &mut collection).await?;
     Ok(())
 }
