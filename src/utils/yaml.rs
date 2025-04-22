@@ -1,6 +1,6 @@
 use crate::error;
 use crate::resolve::{ProductInfo, ProductRelease};
-use snafu::{whatever, OptionExt, ResultExt};
+use snafu::{OptionExt, ResultExt, whatever};
 
 pub async fn update_yaml(
     yaml_path: String,
@@ -17,62 +17,87 @@ pub async fn update_yaml(
                 yaml_path, e
             )
         })?;
-    let platforms = &mut v["modules"]
-        .as_sequence_mut()
-        .with_whatever_context(|| {
-            format!(
-                "Unexpected YAML structure while reading modules, path: {}",
-                yaml_path
-            )
-        })?
-        .iter_mut()
-        .find_map(|x| {
-            x.as_mapping_mut().and_then(|mapping| {
-                mapping["name"]
-                    .as_str()
-                    .with_whatever_context(|| {
-                        format!("Failed to convert name in YAML, path: {}", yaml_path)
-                    })
-                    .map(|name| name == product_info.lowercase())
-                    .map(|matched| matched.then_some(mapping))
-                    .transpose()
+
+    macro_rules! get_mut_map_err {
+        ($item:ident,$target:ident) => {
+            $item
+                .get_mut(stringify!($target))
+                .with_whatever_context(|| {
+                    format!(
+                        "Failed to find {} in yaml, path: {}",
+                        stringify!($l),
+                        yaml_path
+                    )
+                })
+        };
+    }
+
+    let mut platforms = {
+        let platform_lowercase_named_tag = get_mut_map_err!(v, modules)?
+            .as_sequence_mut()
+            .with_whatever_context(|| {
+                format!(
+                    "Unexpected YAML structure while reading modules, path: {}",
+                    yaml_path
+                )
+            })?
+            .iter_mut()
+            .find_map(|x| {
+                x.as_mapping_mut().and_then(|mapping| {
+                    get_mut_map_err!(mapping, name)
+                        .and_then(|v| {
+                            v.as_str()
+                                .with_whatever_context(|| {
+                                    format!("Failed to convert name in YAML, path: {}", yaml_path)
+                                })
+                                .map(|name| name == product_info.lowercase())
+                        })
+                        .map(|matched| matched.then_some(mapping))
+                        .transpose()
+                })
             })
-        })
-        .with_whatever_context(|| {
-            format!(
-                "Failed to find {} in YAML, path: {}",
-                product_info.lowercase(),
-                yaml_path
-            )
-        })??["sources"]
-        .as_sequence_mut()
-        .with_whatever_context(|| {
-            format!(
-                "Unexpected YAML structure while reading sources, path: {}",
-                yaml_path
-            )
-        })?
-        .iter_mut()
-        .filter(|v| {
-            v.is_mapping()
-                && v.as_mapping().unwrap().contains_key("filename")
-                && v.as_mapping().unwrap()["filename"]
-                    .eq(&format!("{}.tar.gz", product_info.lowercase()))
-        })
-        .collect::<Vec<&mut serde_yaml::Value>>();
+            .with_whatever_context(|| {
+                format!(
+                    "Failed to find {} in YAML, path: {}",
+                    product_info.lowercase(),
+                    yaml_path
+                )
+            })??;
+        get_mut_map_err!(platform_lowercase_named_tag, sources)?
+            .as_sequence_mut()
+            .with_whatever_context(|| {
+                format!(
+                    "Unexpected YAML structure while reading sources, path: {}",
+                    yaml_path
+                )
+            })?
+            .iter_mut()
+            .filter(|v| {
+                v.is_mapping()
+                    && v.as_mapping().unwrap().contains_key("filename")
+                    && v.as_mapping().unwrap()["filename"]
+                        .eq(&format!("{}.tar.gz", product_info.lowercase()))
+            })
+            .collect::<Vec<&mut serde_yaml::Value>>()
+    };
 
     let x86_64 = platforms
         .iter_mut()
         .find_map(|platform| {
-            platform["only-arches"]
-                .as_sequence()
+            platform
+                .get("only-arches")
                 .with_whatever_context(|| {
-                    format!(
-                        "Unexpected YAML structure while reading only-arches, path: {}",
-                        yaml_path
-                    )
+                    format!("Failed to find only-arches, path: {}", yaml_path)
                 })
-                .map(|seq| seq[0].eq("x86_64"))
+                .and_then(|v| {
+                    v.as_sequence().with_whatever_context(|| {
+                        format!(
+                            "Unexpected YAML structure while reading only-arches, path: {}",
+                            yaml_path
+                        )
+                    })
+                })
+                .map(|seq| seq.len() != 0 &&  seq[0].eq("x86_64"))
                 .map(|is_target| is_target.then_some(platform))
                 .transpose()
         })
@@ -85,10 +110,29 @@ pub async fn update_yaml(
     }
     let client = reqwest::Client::new();
     collection[0].complete_checksum(client).await;
+
+    macro_rules! platform_assign {
+        ($platform:ident[$l:ident] = $expr:expr) => {
+            $platform
+                .get_mut(stringify!($l))
+                .map(|$l| {
+                    *$l = $expr;
+                })
+                .with_whatever_context(|| {
+                    format!(
+                        "Failed to find {} in yaml, path: {}",
+                        stringify!($l),
+                        yaml_path
+                    )
+                })?;
+        };
+    }
+
     let json_amd64 = &collection[0].linux_amd64;
-    x86_64["size"] =
-        serde_yaml::Value::Number(serde_yaml::Number::from(json_amd64.size));
-    x86_64["url"] = serde_yaml::Value::String(json_amd64.link.to_string());
+    platform_assign!(
+        x86_64[size] = serde_yaml::Value::Number(serde_yaml::Number::from(json_amd64.size))
+    );
+    platform_assign!(x86_64[url] = serde_yaml::Value::String(json_amd64.link.to_string()));
     let checksum = json_amd64
         .checksum_link
         .as_ref()
@@ -98,31 +142,34 @@ pub async fn update_yaml(
     if !_type.eq("sha256") {
         whatever!("Different checksum type");
     }
-    x86_64["sha256"] = serde_yaml::Value::String(_res.clone());
+    platform_assign!(x86_64[sha256] = serde_yaml::Value::String(_res.clone()));
 
-    if let Some(aarch64) = platforms
-        .iter_mut()
-        .find_map(|platform| {
-            platform["only-arches"]
-                .as_sequence_mut()
-                .with_whatever_context(|| {
+    if let Some(aarch64) = platforms.iter_mut().find_map(|platform| {
+        platform
+            .get("only-arches")
+            .with_whatever_context(|| format!("Failed to find only-arches, path: {}", yaml_path))
+            .and_then(|v| {
+                v.as_sequence().with_whatever_context(|| {
                     format!(
                         "Unexpected YAML structure while reading only-arches, path: {}",
                         yaml_path
                     )
                 })
-                .map(|seq| seq[0].eq("aarch64"))
-                .map(|is_target| is_target.then_some(platform))
-                .transpose()
-        })
-    {
+            })
+            .map(|seq| seq.len() != 0 && seq[0].eq("aarch64"))
+            .map(|is_target| is_target.then_some(platform))
+            .transpose()
+    }) {
         let aarch64 = aarch64?;
-        let json_aarch64 = collection[0].linux_arm64.as_ref().whatever_context("Failed to find latest aarch64 in JSON")?;
-        aarch64["size"] = serde_yaml::Value::Number(serde_yaml::Number::from(
-            json_aarch64.size,
-        ));
-        aarch64["url"] =
-            serde_yaml::Value::String(json_aarch64.link.to_string());
+        let json_aarch64 = collection[0]
+            .linux_arm64
+            .as_ref()
+            .whatever_context("Failed to find latest aarch64 in JSON")?;
+        platform_assign!(
+            aarch64[size] = serde_yaml::Value::Number(serde_yaml::Number::from(json_aarch64.size,))
+        );
+        platform_assign!(aarch64[url] = serde_yaml::Value::String(json_aarch64.link.to_string()));
+
         let checksum = json_aarch64
             .checksum_link
             .as_ref()
@@ -132,9 +179,12 @@ pub async fn update_yaml(
         if !_type.eq("sha256") {
             whatever!("Different checksum type");
         }
-        aarch64["sha256"] = serde_yaml::Value::String(_res.clone());
+        platform_assign!(aarch64[sha256] = serde_yaml::Value::String(_res.clone()));
     }
-    let yaml_str = serde_yaml::to_string(&v).whatever_context("Failed to serialize YAML, this is a bug")?;
-    std::fs::write(&yaml_path, yaml_str).with_whatever_context(|e| format!("Failed to write YAML to {}, source: {:?}", yaml_path, e))?;
+    let yaml_str =
+        serde_yaml::to_string(&v).whatever_context("Failed to serialize YAML, this is a bug")?;
+    std::fs::write(&yaml_path, yaml_str).with_whatever_context(|e| {
+        format!("Failed to write YAML to {}, source: {:?}", yaml_path, e)
+    })?;
     Ok(())
 }

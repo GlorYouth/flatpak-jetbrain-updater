@@ -3,6 +3,16 @@ use crate::{error, resolve};
 use serde_json::Value;
 use snafu::OptionExt;
 
+macro_rules! json_get_with_check {
+    ($item:ident,$target:ident) => {
+        crate::get_with_check!(
+            $item,
+            $target,
+            "in json, which has been downloaded from jetbrains server"
+        )
+    };
+}
+
 pub fn read_json(array: &Vec<Value>) -> error::Result<Vec<ProductRelease>> {
     let re = resolve::RE::default();
     array
@@ -14,18 +24,20 @@ pub fn read_json(array: &Vec<Value>) -> error::Result<Vec<ProductRelease>> {
             ) -> error::Result<Platform> {
                 let checksum_link = if is_first {
                     Some(resolve::Checksum::from_str(
-                        map["checksumLink"].as_str().whatever_context(
-                            "Unexpected JSON structure while reading checksumLink",
-                        )?,
+                        json_get_with_check!(map, checksumLink)
+                            .as_str()
+                            .whatever_context(
+                                "Unexpected JSON structure while reading checksumLink",
+                            )?,
                     ))
                 } else {
                     None
                 };
                 Ok(Platform {
-                    link: map["link"]
+                    link: json_get_with_check!(map, link)
                         .as_str()
                         .whatever_context("Unexpected JSON structure while reading link")?,
-                    size: map["size"]
+                    size: json_get_with_check!(map, size)
                         .as_u64()
                         .whatever_context("Unexpected JSON structure while reading size")?
                         as usize,
@@ -39,21 +51,18 @@ pub fn read_json(array: &Vec<Value>) -> error::Result<Vec<ProductRelease>> {
                 let linux_arm64 = {
                     if !is_first {
                         None
-                    } else if let Some(map) = download["linuxARM64"].as_object() {
+                    } else if let Some(map) = json_get_with_check!(download, linuxARM64).as_object()
+                    {
                         Some(init_platform(map, is_first)?)
                     } else {
                         None
                     }
                 };
                 let release = ProductRelease {
-                    date: x
-                        .get("date")
-                        .whatever_context("Unexpected JSON structure while reading date")?
+                    date: json_get_with_check!(x, date)
                         .as_str()
                         .whatever_context("Failed to convert date to string")?,
-                    version: x
-                        .get("version")
-                        .whatever_context("Unexpected JSON structure while reading version")?
+                    version: json_get_with_check!(x, version)
                         .as_str()
                         .whatever_context("Failed to convert version to string")?,
                     linux_amd64,
