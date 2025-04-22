@@ -56,47 +56,6 @@ impl MappingEx for Mapping {
     }
 }
 
-async fn find_module<'a>(
-    root: &'a mut Value,
-    product: &ProductInfo,
-    path: &str,
-) -> error::Result<&'a mut Mapping> {
-    let seq = root.get_seq_mut("modules", path)?;
-    for item in seq {
-        let map = item
-            .as_mapping_mut()
-            .with_whatever_context(|| format!("module entry is not mapping at {}", path))?;
-        let name = map
-            .get("name")
-            .and_then(|v| v.as_str())
-            .with_whatever_context(|| format!("module.name missing or not a str at {}", path))?;
-        if name == product.short() {
-            return Ok(map);
-        }
-    }
-    whatever!("Module '{}' not found in {}", product.short(), path)
-}
-
-fn find_arch<'a>(
-    sources: &'a mut Vec<Value>,
-    target_arch: &str,
-    path: &str,
-) -> error::Result<&'a mut Mapping> {
-    for src in sources {
-        let map = src
-            .as_mapping_mut()
-            .with_whatever_context(|| format!("source entry is not mapping at {}", path))?;
-        let arches = map
-            .get("only-arches")
-            .and_then(|v| v.as_sequence())
-            .with_whatever_context(|| format!("only-arches missing or not seq at {}", path))?;
-        if arches.get(0).and_then(Value::as_str) == Some(target_arch) {
-            return Ok(map);
-        }
-    }
-    whatever!("Arch '{}' not found in {}", target_arch, path)
-}
-
 #[inline]
 fn read_yaml(path: &str) -> error::Result<String> {
     std::fs::read_to_string(&path)

@@ -3,7 +3,7 @@ A Rust Tool to Update Flatpak Jetbrains' IDEs Automatically.
 
 ## 简单介绍
 
-目前未经严格测试，只是个半成品，本工具主要用于 flatpak 的 JetBrains IDEs 更新，目前仅在 WebStorm 测试过， 使用此工具，你可以即时更新 Flatpak JetBrains IDE，而不用被官方 Flatpak 慢如蜗牛的更新速度恶心。  
+目前未经严格测试，只是个半成品，本工具主要用于 flatpak 的 JetBrains IDEs 更新，目前仅在 WebStorm 、 Pycharm-Community, 测试过， 使用此工具，你可以即时更新 Flatpak JetBrains IDE，而不用被官方 Flatpak 慢如蜗牛的更新速度恶心。  
 
 需要注意的是，本工具仅更新IDE部分，对其他 flatpak-builder 需要的工具包甚至桌面环境相关包更新并未涉及，故仍然在一定程度上要与官方 repo 同步  
 
@@ -17,7 +17,7 @@ CLion,
 RustRover,  
 WebStorm,  
 GoLand,  
-Pycharm-Community,
+Pycharm-Community,  
 
 若你有rust基础或者使用AI，可以在 /src/resolve/product.rs 内添加其他IDE进行测试  
 
