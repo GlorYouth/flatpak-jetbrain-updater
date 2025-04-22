@@ -17,7 +17,7 @@ CLion,
 RustRover,  
 WebStorm,  
 GoLand,  
-PyCharm,  --其实并未支持
+Pycharm-Community,
 
 若你有rust基础或者使用AI，可以在 /src/resolve/product.rs 内添加其他IDE进行测试  
 

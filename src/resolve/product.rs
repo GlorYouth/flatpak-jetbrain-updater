@@ -1,4 +1,5 @@
 pub struct ProductInfo {
+    short: String,
     name: String,
     lowercase: String,
     code: String,
@@ -22,18 +23,19 @@ impl ProductInfo {
         let s = name.to_lowercase();
 
         // 用静态数组维护关键词与其他参数的对应关系
-        const PAIRS: [(&str, &str, &str); 5] = [
-            ("clion", "CLion", "CL"),
-            ("rustrover", "RustRover", "RR"),
-            ("webstorm", "WebStorm", "WS"),
-            ("goland", "GoLand", "GL"),
-            ("pycharm", "PyCharm", "PC"),
+        const PAIRS: [(&str, &str, &str, &str); 5] = [
+            ("clion", "clion", "CLion", "CL"),
+            ("rustrover", "rustrover", "RustRover", "RR"),
+            ("webstorm", "webstorm", "WebStorm", "WS"),
+            ("goland", "goland", "GoLand", "GL"),
+            ("pycharm", "pycharm-community", "PyCharm-Community", "PCC"),
         ];
 
         // 迭代查找：一旦找到包含关键词的，就返回对应
-        PAIRS.into_iter().find_map(|(lc, name, code)| {
+        PAIRS.into_iter().find_map(|(short, lc, name, code)| {
             if s.contains(lc) {
                 Some(ProductInfo {
+                    short: short.to_string(),
                     name: name.to_string(),
                     lowercase: lc.to_string(),
                     code: code.to_string(),
@@ -57,5 +59,10 @@ impl ProductInfo {
     #[inline]
     pub fn code(&self) -> &str {
         &self.code
+    }
+
+    #[inline]
+    pub fn short(&self) -> &str {
+        self.short.as_str()
     }
 }

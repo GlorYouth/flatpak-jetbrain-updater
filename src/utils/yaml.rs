@@ -50,7 +50,7 @@ pub async fn update_yaml(
                                 .with_whatever_context(|| {
                                     format!("Failed to convert name in YAML, path: {}", yaml_path)
                                 })
-                                .map(|name| name == product_info.lowercase())
+                                .map(|name| name == product_info.short())
                         })
                         .map(|matched| matched.then_some(mapping))
                         .transpose()
@@ -59,10 +59,11 @@ pub async fn update_yaml(
             .with_whatever_context(|| {
                 format!(
                     "Failed to find {} in YAML, path: {}",
-                    product_info.lowercase(),
+                    product_info.short(),
                     yaml_path
                 )
             })??;
+
         get_mut_map_err!(platform_lowercase_named_tag, sources)?
             .as_sequence_mut()
             .with_whatever_context(|| {
@@ -73,37 +74,57 @@ pub async fn update_yaml(
             })?
             .iter_mut()
             .filter(|v| {
+                static KEYS: &[&str] = &["filename", "dest-filename"];
                 v.is_mapping()
-                    && v.as_mapping().unwrap().contains_key("filename")
-                    && v.as_mapping().unwrap()["filename"]
-                        .eq(&format!("{}.tar.gz", product_info.lowercase()))
+                    && KEYS.iter().any(|key| {
+                        v.as_mapping().unwrap().contains_key(key)
+                            && v.as_mapping().unwrap()[key]
+                                .eq(&format!("{}.tar.gz", product_info.lowercase()))
+                    })
             })
             .collect::<Vec<&mut serde_yaml::Value>>()
     };
 
-    let x86_64 = platforms
-        .iter_mut()
-        .find_map(|platform| {
-            platform
-                .get("only-arches")
+    let x86_64: &mut serde_yaml::Mapping = {
+        if platforms.len() == 1 {
+            platforms
+                .get_mut(0)
+                .unwrap()
+                .as_mapping_mut()
                 .with_whatever_context(|| {
-                    format!("Failed to find only-arches, path: {}", yaml_path)
+                    format!(
+                        "Unexpected YAML structure while find x86_64 file, path: {}",
+                        yaml_path
+                    )
+                })?
+        } else {
+            platforms
+                .iter_mut()
+                .find_map(|platform| {
+                    platform
+                        .get("only-arches")
+                        .with_whatever_context(|| {
+                            format!("Failed to find only-arches, path: {}", yaml_path)
+                        })
+                        .and_then(|v| {
+                            v.as_sequence().with_whatever_context(|| {
+                                format!(
+                                    "Unexpected YAML structure while reading only-arches, path: {}",
+                                    yaml_path
+                                )
+                            })
+                        })
+                        .map(|seq| seq.len() != 0 && seq[0].eq("x86_64"))
+                        .map(|is_target| is_target.then_some(platform))
+                        .transpose()
                 })
-                .and_then(|v| {
-                    v.as_sequence().with_whatever_context(|| {
-                        format!(
-                            "Unexpected YAML structure while reading only-arches, path: {}",
-                            yaml_path
-                        )
-                    })
-                })
-                .map(|seq| seq.len() != 0 &&  seq[0].eq("x86_64"))
-                .map(|is_target| is_target.then_some(platform))
-                .transpose()
-        })
-        .with_whatever_context(|| {
-            format!("Failed to find x86_64 in YAML, path: {}", yaml_path)
-        })??;
+                .with_whatever_context(|| {
+                    format!("Failed to find x86_64 in YAML, path: {}", yaml_path)
+                })??
+                .as_mapping_mut()
+                .unwrap()
+        }
+    };
     if collection.len() == 0 {
         println!("It is up to date");
         return Ok(());
@@ -129,9 +150,11 @@ pub async fn update_yaml(
     }
 
     let json_amd64 = &collection[0].linux_amd64;
-    platform_assign!(
-        x86_64[size] = serde_yaml::Value::Number(serde_yaml::Number::from(json_amd64.size))
-    );
+    if x86_64.contains_key("size") {
+        platform_assign!(
+            x86_64[size] = serde_yaml::Value::Number(serde_yaml::Number::from(json_amd64.size))
+        );
+    }
     platform_assign!(x86_64[url] = serde_yaml::Value::String(json_amd64.link.to_string()));
     let checksum = json_amd64
         .checksum_link
@@ -144,47 +167,55 @@ pub async fn update_yaml(
     }
     platform_assign!(x86_64[sha256] = serde_yaml::Value::String(_res.clone()));
 
-    if let Some(aarch64) = platforms.iter_mut().find_map(|platform| {
-        platform
-            .get("only-arches")
-            .with_whatever_context(|| format!("Failed to find only-arches, path: {}", yaml_path))
-            .and_then(|v| {
-                v.as_sequence().with_whatever_context(|| {
-                    format!(
-                        "Unexpected YAML structure while reading only-arches, path: {}",
-                        yaml_path
-                    )
+    if platforms.len() > 1 {
+        if let Some(aarch64) = platforms.iter_mut().find_map(|platform| {
+            platform
+                .get("only-arches")
+                .with_whatever_context(|| {
+                    format!("Failed to find only-arches, path: {}", yaml_path)
                 })
-            })
-            .map(|seq| seq.len() != 0 && seq[0].eq("aarch64"))
-            .map(|is_target| is_target.then_some(platform))
-            .transpose()
-    }) {
-        let aarch64 = aarch64?;
-        let json_aarch64 = collection[0]
-            .linux_arm64
-            .as_ref()
-            .whatever_context("Failed to find latest aarch64 in JSON")?;
-        platform_assign!(
-            aarch64[size] = serde_yaml::Value::Number(serde_yaml::Number::from(json_aarch64.size,))
-        );
-        platform_assign!(aarch64[url] = serde_yaml::Value::String(json_aarch64.link.to_string()));
+                .and_then(|v| {
+                    v.as_sequence().with_whatever_context(|| {
+                        format!(
+                            "Unexpected YAML structure while reading only-arches, path: {}",
+                            yaml_path
+                        )
+                    })
+                })
+                .map(|seq| seq.len() != 0 && seq[0].eq("aarch64"))
+                .map(|is_target| is_target.then_some(platform))
+                .transpose()
+        }) {
+            let aarch64 = aarch64?;
+            let json_aarch64 = collection[0]
+                .linux_arm64
+                .as_ref()
+                .whatever_context("Failed to find latest aarch64 in JSON")?;
+            platform_assign!(
+                aarch64[size] =
+                    serde_yaml::Value::Number(serde_yaml::Number::from(json_aarch64.size,))
+            );
+            platform_assign!(
+                aarch64[url] = serde_yaml::Value::String(json_aarch64.link.to_string())
+            );
 
-        let checksum = json_aarch64
-            .checksum_link
-            .as_ref()
-            .whatever_context("Checksum has not been requested from the server, this is a bug")?
-            .clone();
-        let (_type, _res) = checksum.into_type_and_res();
-        if !_type.eq("sha256") {
-            whatever!("Different checksum type");
+            let checksum = json_aarch64
+                .checksum_link
+                .as_ref()
+                .whatever_context("Checksum has not been requested from the server, this is a bug")?
+                .clone();
+            let (_type, _res) = checksum.into_type_and_res();
+            if !_type.eq("sha256") {
+                whatever!("Different checksum type");
+            }
+            platform_assign!(aarch64[sha256] = serde_yaml::Value::String(_res.clone()));
         }
-        platform_assign!(aarch64[sha256] = serde_yaml::Value::String(_res.clone()));
     }
     let yaml_str =
         serde_yaml::to_string(&v).whatever_context("Failed to serialize YAML, this is a bug")?;
     std::fs::write(&yaml_path, yaml_str).with_whatever_context(|e| {
         format!("Failed to write YAML to {}, source: {:?}", yaml_path, e)
     })?;
+    
     Ok(())
 }
