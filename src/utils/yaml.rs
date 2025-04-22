@@ -19,7 +19,7 @@ impl ValueExt for Value {
     //         .as_mapping()
     //         .with_whatever_context(|| format!("'{}' is not a mapping at {}", key, path))
     // }
-    // 
+    //
     // #[inline]
     // fn get_map_mut<'a>(&'a mut self, key: &str, path: &str) -> error::Result<&'a mut Mapping> {
     //     self.get_mut(key)
@@ -49,6 +49,7 @@ trait MappingEx {
 }
 
 impl MappingEx for Mapping {
+    #[inline]
     fn get_mut_err<'a>(&'a mut self, key: &str, path: &str) -> error::Result<&'a mut Value> {
         Mapping::get_mut(self, key)
             .with_whatever_context(|| format!("Failed to find {} in yaml, path: {}", key, path))
@@ -214,33 +215,21 @@ impl<'a> Platforms<'a> {
             whatever!("Failed to find x86_64 in YAML path: {}", yaml_path)
         }
     }
-    
-    fn write_from_release(&mut self,product_release: &ProductRelease, yaml_path: &str) -> error::Result<()> {
 
-        let json_amd64 = &product_release.linux_amd64;
-        if self.x86_64.contains_key("size") {
-            *self.x86_64.get_mut_err("size",yaml_path)? = Value::Number(serde_yaml::Number::from(json_amd64.size));
-        }
-        *self.x86_64.get_mut_err("url",yaml_path)? = Value::String(json_amd64.link.to_string());
-        let checksum = json_amd64
-            .checksum_link
-            .as_ref()
-            .whatever_context("Checksum has not been requested from the server, this is a bug")?
-            .clone();
-        let (_type, _res) = checksum.into_type_and_res();
-        if !_type.eq("sha256") {
-            whatever!("Different checksum type");
-        }
-        *self.x86_64.get_mut_err("sha256", yaml_path)? = Value::String(_res.clone());
-
-        if let Some(aarch64) = &mut self.aarch64 {
-            let json_aarch64 = product_release
-                .linux_arm64
-                .as_ref()
-                .whatever_context("Failed to find latest aarch64 in JSON")?;
-            *aarch64.get_mut_err("size", yaml_path)? = Value::Number(serde_yaml::Number::from(json_aarch64.size));
-
-            let checksum = json_aarch64
+    fn write_from_release(
+        &mut self,
+        product_release: &ProductRelease,
+        yaml_path: &str,
+    ) -> error::Result<()> {
+        
+        use crate::resolve::Platform;
+        let write = |map: &mut Mapping, platform: &Platform| -> error::Result<()> {
+            if map.contains_key("size") {
+                *map.get_mut_err("size", yaml_path)? =
+                    Value::Number(serde_yaml::Number::from(platform.size));
+            }
+            *map.get_mut_err("url", yaml_path)? = Value::String(platform.link.to_string());
+            let checksum = platform
                 .checksum_link
                 .as_ref()
                 .whatever_context("Checksum has not been requested from the server, this is a bug")?
@@ -249,7 +238,16 @@ impl<'a> Platforms<'a> {
             if !_type.eq("sha256") {
                 whatever!("Different checksum type");
             }
-            *aarch64.get_mut_err("sha256", yaml_path)? = Value::String(_res.clone());
+            *map.get_mut_err("sha256", yaml_path)? = Value::String(_res.clone());
+            Ok(())
+        };
+        
+        write(&mut self.x86_64,&product_release.linux_amd64)?;
+
+        if let Some(aarch64) = &mut self.aarch64 {
+            write(aarch64,product_release.linux_arm64
+                .as_ref()
+                .whatever_context("Failed to find latest aarch64 in JSON")?)?;
         }
         Ok(())
     }
@@ -274,10 +272,10 @@ fn collect_platforms<'a>(
             static KEYS: &[&str] = &["filename", "dest-filename"];
             v.is_mapping()
                 && KEYS.iter().any(|key| {
-                v.as_mapping().unwrap().contains_key(key)
-                    && v.as_mapping().unwrap()[key]
-                    .eq(&format!("{}.tar.gz", product_info.lowercase()))
-            })
+                    v.as_mapping().unwrap().contains_key(key)
+                        && v.as_mapping().unwrap()[key]
+                            .eq(&format!("{}.tar.gz", product_info.lowercase()))
+                })
         })
         .collect::<Vec<&mut Value>>();
     let maps = Vec::with_capacity(vec.len());
@@ -298,7 +296,6 @@ pub async fn update_yaml(
     product_info: &ProductInfo,
     collection: &mut Vec<ProductRelease<'_>>,
 ) -> error::Result<()> {
-    
     let yaml = read_yaml(&yaml_path)?;
     let mut root = parse_yaml(yaml, &yaml_path)?;
     let modules = root.get_seq_mut("modules", &yaml_path)?;
@@ -310,11 +307,11 @@ pub async fn update_yaml(
         println!("It is up to date");
         return Ok(());
     }
-    
+
     let client = reqwest::Client::new();
     collection[0].complete_checksum(client).await;
     platforms.write_from_release(&collection[0], &yaml_path)?;
-    
+
     let yaml_str =
         serde_yaml::to_string(&root).whatever_context("Failed to serialize YAML, this is a bug")?;
     std::fs::write(&yaml_path, yaml_str).with_whatever_context(|e| {
