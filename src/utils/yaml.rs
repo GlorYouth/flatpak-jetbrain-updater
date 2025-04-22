@@ -2,202 +2,243 @@ use crate::error;
 use crate::resolve::{ProductInfo, ProductRelease};
 use snafu::{OptionExt, ResultExt, whatever};
 
-pub async fn update_yaml(
-    yaml_path: String,
-    product_info: &ProductInfo,
-    collection: &mut Vec<ProductRelease<'_>>,
-) -> error::Result<()> {
-    let yaml = std::fs::read_to_string(&yaml_path).with_whatever_context(|e| {
-        format!("Failed to read yaml file at {}, source: {:?}", yaml_path, e)
-    })?;
-    let mut v =
-        serde_yaml::from_str::<serde_yaml::Value>(yaml.as_str()).with_whatever_context(|e| {
-            format!(
-                "Failed to parse yaml file at {}, source: {:?}",
-                yaml_path, e
-            )
-        })?;
+use serde_yaml::{Mapping, Value};
 
-    macro_rules! get_mut_map_err {
-        ($item:ident,$target:ident) => {
-            $item
-                .get_mut(stringify!($target))
-                .with_whatever_context(|| {
-                    format!(
-                        "Failed to find {} in yaml, path: {}",
-                        stringify!($l),
-                        yaml_path
-                    )
-                })
-        };
+trait ValueExt {
+    // fn get_map<'a>(&'a self, key: &str, path: &str) -> error::Result<&'a Mapping>;
+    // fn get_map_mut<'a>(&'a mut self, key: &str, path: &str) -> error::Result<&'a mut Mapping>;
+    // fn get_seq<'a>(&'a self, key: &str, path: &str) -> error::Result<&'a Vec<Value>>;
+    fn get_seq_mut<'a>(&'a mut self, key: &str, path: &str) -> error::Result<&'a mut Vec<Value>>;
+}
+
+impl ValueExt for Value {
+    // #[inline]
+    // fn get_map<'a>(&'a self, key: &str, path: &str) -> error::Result<&'a Mapping> {
+    //     self.get(key)
+    //         .with_whatever_context(|| format!("Missing '{}' in YAML at {}", key, path))?
+    //         .as_mapping()
+    //         .with_whatever_context(|| format!("'{}' is not a mapping at {}", key, path))
+    // }
+    // 
+    // #[inline]
+    // fn get_map_mut<'a>(&'a mut self, key: &str, path: &str) -> error::Result<&'a mut Mapping> {
+    //     self.get_mut(key)
+    //         .with_whatever_context(|| format!("Missing '{}' in YAML at {}", key, path))?
+    //         .as_mapping_mut()
+    //         .with_whatever_context(|| format!("'{}' is not a mapping at {}", key, path))
+    // }
+    // #[inline]
+    // fn get_seq<'a>(&'a self, key: &str, path: &str) -> error::Result<&'a Vec<Value>> {
+    //     self.get(key)
+    //         .with_whatever_context(|| format!("Missing '{}' in YAML at {}", key, path))?
+    //         .as_sequence()
+    //         .with_whatever_context(|| format!("'{}' is not a sequence at {}", key, path))
+    // }
+
+    #[inline]
+    fn get_seq_mut<'a>(&'a mut self, key: &str, path: &str) -> error::Result<&'a mut Vec<Value>> {
+        self.get_mut(key)
+            .with_whatever_context(|| format!("Missing '{}' in YAML at {}", key, path))?
+            .as_sequence_mut()
+            .with_whatever_context(|| format!("'{}' is not a sequence at {}", key, path))
     }
+}
 
-    let mut platforms = {
-        let platform_lowercase_named_tag = get_mut_map_err!(v, modules)?
-            .as_sequence_mut()
-            .with_whatever_context(|| {
-                format!(
-                    "Unexpected YAML structure while reading modules, path: {}",
-                    yaml_path
-                )
-            })?
-            .iter_mut()
-            .find_map(|x| {
-                x.as_mapping_mut().and_then(|mapping| {
-                    get_mut_map_err!(mapping, name)
-                        .and_then(|v| {
-                            v.as_str()
-                                .with_whatever_context(|| {
-                                    format!("Failed to convert name in YAML, path: {}", yaml_path)
-                                })
-                                .map(|name| name == product_info.short())
-                        })
-                        .map(|matched| matched.then_some(mapping))
-                        .transpose()
-                })
-            })
-            .with_whatever_context(|| {
-                format!(
-                    "Failed to find {} in YAML, path: {}",
-                    product_info.short(),
-                    yaml_path
-                )
-            })??;
+trait MappingEx {
+    fn get_mut_err<'a>(&'a mut self, key: &str, path: &str) -> error::Result<&'a mut Value>;
+}
 
-        get_mut_map_err!(platform_lowercase_named_tag, sources)?
-            .as_sequence_mut()
-            .with_whatever_context(|| {
-                format!(
-                    "Unexpected YAML structure while reading sources, path: {}",
-                    yaml_path
-                )
-            })?
-            .iter_mut()
-            .filter(|v| {
-                static KEYS: &[&str] = &["filename", "dest-filename"];
-                v.is_mapping()
-                    && KEYS.iter().any(|key| {
-                        v.as_mapping().unwrap().contains_key(key)
-                            && v.as_mapping().unwrap()[key]
-                                .eq(&format!("{}.tar.gz", product_info.lowercase()))
-                    })
-            })
-            .collect::<Vec<&mut serde_yaml::Value>>()
-    };
+impl MappingEx for Mapping {
+    fn get_mut_err<'a>(&'a mut self, key: &str, path: &str) -> error::Result<&'a mut Value> {
+        Mapping::get_mut(self, key)
+            .with_whatever_context(|| format!("Failed to find {} in yaml, path: {}", key, path))
+    }
+}
 
-    let x86_64: &mut serde_yaml::Mapping = {
-        if platforms.len() == 1 {
-            platforms
-                .get_mut(0)
-                .unwrap()
-                .as_mapping_mut()
-                .with_whatever_context(|| {
-                    format!(
-                        "Unexpected YAML structure while find x86_64 file, path: {}",
-                        yaml_path
-                    )
-                })?
-        } else {
-            platforms
-                .iter_mut()
-                .find_map(|platform| {
-                    platform
-                        .get("only-arches")
-                        .with_whatever_context(|| {
-                            format!("Failed to find only-arches, path: {}", yaml_path)
-                        })
-                        .and_then(|v| {
-                            v.as_sequence().with_whatever_context(|| {
-                                format!(
-                                    "Unexpected YAML structure while reading only-arches, path: {}",
-                                    yaml_path
-                                )
-                            })
-                        })
-                        .map(|seq| seq.len() != 0 && seq[0].eq("x86_64"))
-                        .map(|is_target| is_target.then_some(platform))
-                        .transpose()
-                })
-                .with_whatever_context(|| {
-                    format!("Failed to find x86_64 in YAML, path: {}", yaml_path)
-                })??
-                .as_mapping_mut()
-                .unwrap()
+async fn find_module<'a>(
+    root: &'a mut Value,
+    product: &ProductInfo,
+    path: &str,
+) -> error::Result<&'a mut Mapping> {
+    let seq = root.get_seq_mut("modules", path)?;
+    for item in seq {
+        let map = item
+            .as_mapping_mut()
+            .with_whatever_context(|| format!("module entry is not mapping at {}", path))?;
+        let name = map
+            .get("name")
+            .and_then(|v| v.as_str())
+            .with_whatever_context(|| format!("module.name missing or not a str at {}", path))?;
+        if name == product.short() {
+            return Ok(map);
         }
-    };
-    if collection.len() == 0 {
-        println!("It is up to date");
-        return Ok(());
     }
-    let client = reqwest::Client::new();
-    collection[0].complete_checksum(client).await;
+    whatever!("Module '{}' not found in {}", product.short(), path)
+}
 
-    macro_rules! platform_assign {
-        ($platform:ident[$l:ident] = $expr:expr) => {
-            $platform
-                .get_mut(stringify!($l))
-                .map(|$l| {
-                    *$l = $expr;
-                })
-                .with_whatever_context(|| {
-                    format!(
-                        "Failed to find {} in yaml, path: {}",
-                        stringify!($l),
-                        yaml_path
-                    )
-                })?;
-        };
+fn find_arch<'a>(
+    sources: &'a mut Vec<Value>,
+    target_arch: &str,
+    path: &str,
+) -> error::Result<&'a mut Mapping> {
+    for src in sources {
+        let map = src
+            .as_mapping_mut()
+            .with_whatever_context(|| format!("source entry is not mapping at {}", path))?;
+        let arches = map
+            .get("only-arches")
+            .and_then(|v| v.as_sequence())
+            .with_whatever_context(|| format!("only-arches missing or not seq at {}", path))?;
+        if arches.get(0).and_then(Value::as_str) == Some(target_arch) {
+            return Ok(map);
+        }
     }
+    whatever!("Arch '{}' not found in {}", target_arch, path)
+}
 
-    let json_amd64 = &collection[0].linux_amd64;
-    if x86_64.contains_key("size") {
-        platform_assign!(
-            x86_64[size] = serde_yaml::Value::Number(serde_yaml::Number::from(json_amd64.size))
-        );
-    }
-    platform_assign!(x86_64[url] = serde_yaml::Value::String(json_amd64.link.to_string()));
-    let checksum = json_amd64
-        .checksum_link
-        .as_ref()
-        .whatever_context("Checksum has not been requested from the server, this is a bug")?
-        .clone();
-    let (_type, _res) = checksum.into_type_and_res();
-    if !_type.eq("sha256") {
-        whatever!("Different checksum type");
-    }
-    platform_assign!(x86_64[sha256] = serde_yaml::Value::String(_res.clone()));
+#[inline]
+fn read_yaml(path: &str) -> error::Result<String> {
+    std::fs::read_to_string(&path)
+        .with_whatever_context(|e| format!("Failed to read yaml file at {}, source: {:?}", path, e))
+}
 
-    if platforms.len() > 1 {
-        if let Some(aarch64) = platforms.iter_mut().find_map(|platform| {
-            platform
-                .get("only-arches")
-                .with_whatever_context(|| {
-                    format!("Failed to find only-arches, path: {}", yaml_path)
-                })
-                .and_then(|v| {
-                    v.as_sequence().with_whatever_context(|| {
-                        format!(
-                            "Unexpected YAML structure while reading only-arches, path: {}",
-                            yaml_path
-                        )
+#[inline]
+fn parse_yaml(yaml: String, yaml_path: &str) -> error::Result<Value> {
+    serde_yaml::from_str::<Value>(yaml.as_str()).with_whatever_context(|e| {
+        format!(
+            "Failed to parse yaml file at {}, source: {:?}",
+            yaml_path, e
+        )
+    })
+}
+
+fn find_named_map<'a>(
+    modules: &'a mut Vec<Value>,
+    product_info: &ProductInfo,
+    yaml_path: &str,
+) -> error::Result<&'a mut Mapping> {
+    modules
+        .iter_mut()
+        .find_map(|x| {
+            x.as_mapping_mut().and_then(|mapping| {
+                mapping
+                    .get_mut_err("name", yaml_path)
+                    .and_then(|v| {
+                        v.as_str()
+                            .with_whatever_context(|| {
+                                format!("Failed to convert name in YAML, path: {}", yaml_path)
+                            })
+                            .map(|name| name == product_info.short())
                     })
-                })
-                .map(|seq| seq.len() != 0 && seq[0].eq("aarch64"))
-                .map(|is_target| is_target.then_some(platform))
-                .transpose()
-        }) {
-            let aarch64 = aarch64?;
-            let json_aarch64 = collection[0]
+                    .map(|matched| matched.then_some(mapping))
+                    .transpose()
+            })
+        })
+        .with_whatever_context(|| {
+            format!(
+                "Failed to find {} in YAML, path: {}",
+                product_info.short(),
+                yaml_path
+            )
+        })?
+}
+
+struct Platforms<'a> {
+    x86_64: &'a mut Mapping,
+    aarch64: Option<&'a mut Mapping>,
+}
+
+impl<'a> Platforms<'a> {
+    fn from_collected(
+        collected: &'a mut Vec<&'a mut Mapping>,
+        product_info: &ProductInfo,
+        yaml_path: &str,
+    ) -> error::Result<Platforms<'a>> {
+        if collected.is_empty() {
+            whatever!(
+                "Cannot find any '{}.tar.gz' file in YAML, path: {}",
+                product_info.lowercase(),
+                yaml_path
+            );
+        };
+        if collected.len() == 1 {
+            Ok(Platforms {
+                x86_64: &mut collected[0],
+                aarch64: None,
+            })
+        } else {
+            let mut units = [("x86_64", None), ("aarch64", None)];
+            for i in 0..collected.len() {
+                collected[i].get_mut_err("only-arches", yaml_path).and_then(|v| {
+                    let seq = v.as_sequence().with_whatever_context(|| {
+                        format!("Unexpected YAML structure while reading only-arches, path: {}", yaml_path)
+                    })?;
+                    let seq_str = seq.first().with_whatever_context(|| {
+                        format!("The only-arches sequence contain no values in YAML, path: {}", yaml_path)
+                    })?.as_str().with_whatever_context(|| {
+                        format!("Failed to convert only-arches first element to string in YAML, path: {}",yaml_path)
+                    })?;
+                    for i in 0..units.len() {
+                        if units[i].0.eq(seq_str) {
+                            if units[i].1.is_some() {
+                                whatever!("There are conflict arch software in YAML, path: {}", yaml_path);
+                            }
+                            units[i].1 = Some(i);
+                        }
+                    }
+                    Ok(())
+                })?;
+            }
+            if let Some(x86_64_pos) = units[0].1 {
+                return if let Some(aarch64_pos) = units[1].1 {
+                    let [x86_64, aarch64] = collected
+                        .get_disjoint_mut([x86_64_pos, aarch64_pos])
+                        .with_whatever_context(|e| {
+                        format!(
+                            "The pos of different arches is conflict, this is a bug, source: {}",
+                            e
+                        )
+                    })?;
+                    Ok(Platforms {
+                        x86_64,
+                        aarch64: Some(aarch64),
+                    })
+                } else {
+                    let x86_64 = &mut collected[x86_64_pos];
+                    Ok(Platforms {
+                        x86_64,
+                        aarch64: None,
+                    })
+                };
+            }
+            whatever!("Failed to find x86_64 in YAML path: {}", yaml_path)
+        }
+    }
+    
+    fn write_from_release(&mut self,product_release: &ProductRelease, yaml_path: &str) -> error::Result<()> {
+
+        let json_amd64 = &product_release.linux_amd64;
+        if self.x86_64.contains_key("size") {
+            *self.x86_64.get_mut_err("size",yaml_path)? = Value::Number(serde_yaml::Number::from(json_amd64.size));
+        }
+        *self.x86_64.get_mut_err("url",yaml_path)? = Value::String(json_amd64.link.to_string());
+        let checksum = json_amd64
+            .checksum_link
+            .as_ref()
+            .whatever_context("Checksum has not been requested from the server, this is a bug")?
+            .clone();
+        let (_type, _res) = checksum.into_type_and_res();
+        if !_type.eq("sha256") {
+            whatever!("Different checksum type");
+        }
+        *self.x86_64.get_mut_err("sha256", yaml_path)? = Value::String(_res.clone());
+
+        if let Some(aarch64) = &mut self.aarch64 {
+            let json_aarch64 = product_release
                 .linux_arm64
                 .as_ref()
                 .whatever_context("Failed to find latest aarch64 in JSON")?;
-            platform_assign!(
-                aarch64[size] =
-                    serde_yaml::Value::Number(serde_yaml::Number::from(json_aarch64.size,))
-            );
-            platform_assign!(
-                aarch64[url] = serde_yaml::Value::String(json_aarch64.link.to_string())
-            );
+            *aarch64.get_mut_err("size", yaml_path)? = Value::Number(serde_yaml::Number::from(json_aarch64.size));
 
             let checksum = json_aarch64
                 .checksum_link
@@ -208,14 +249,77 @@ pub async fn update_yaml(
             if !_type.eq("sha256") {
                 whatever!("Different checksum type");
             }
-            platform_assign!(aarch64[sha256] = serde_yaml::Value::String(_res.clone()));
+            *aarch64.get_mut_err("sha256", yaml_path)? = Value::String(_res.clone());
         }
+        Ok(())
     }
+}
+
+fn collect_platforms<'a>(
+    named_map: &'a mut Mapping,
+    product_info: &ProductInfo,
+    yaml_path: &str,
+) -> error::Result<Vec<&'a mut Mapping>> {
+    let vec = named_map
+        .get_mut_err("sources", yaml_path)?
+        .as_sequence_mut()
+        .with_whatever_context(|| {
+            format!(
+                "Unexpected YAML structure while reading sources, path: {}",
+                yaml_path
+            )
+        })?
+        .iter_mut()
+        .filter(|v| {
+            static KEYS: &[&str] = &["filename", "dest-filename"];
+            v.is_mapping()
+                && KEYS.iter().any(|key| {
+                v.as_mapping().unwrap().contains_key(key)
+                    && v.as_mapping().unwrap()[key]
+                    .eq(&format!("{}.tar.gz", product_info.lowercase()))
+            })
+        })
+        .collect::<Vec<&mut Value>>();
+    let maps = Vec::with_capacity(vec.len());
+    vec.into_iter().try_fold(maps, |mut vec, v| {
+        let map = v.as_mapping_mut().with_whatever_context(|| {
+            format!(
+                "Unexpected YAML structure while collect platforms, path: {}",
+                yaml_path
+            )
+        })?;
+        vec.push(map);
+        Ok(vec)
+    })
+}
+
+pub async fn update_yaml(
+    yaml_path: String,
+    product_info: &ProductInfo,
+    collection: &mut Vec<ProductRelease<'_>>,
+) -> error::Result<()> {
+    
+    let yaml = read_yaml(&yaml_path)?;
+    let mut root = parse_yaml(yaml, &yaml_path)?;
+    let modules = root.get_seq_mut("modules", &yaml_path)?;
+    let named_map = find_named_map(modules, product_info, &yaml_path)?;
+    let mut collected = collect_platforms(named_map, &product_info, &yaml_path)?;
+    let mut platforms = Platforms::from_collected(&mut collected, &product_info, &yaml_path)?;
+
+    if collection.len() == 0 {
+        println!("It is up to date");
+        return Ok(());
+    }
+    
+    let client = reqwest::Client::new();
+    collection[0].complete_checksum(client).await;
+    platforms.write_from_release(&collection[0], &yaml_path)?;
+    
     let yaml_str =
-        serde_yaml::to_string(&v).whatever_context("Failed to serialize YAML, this is a bug")?;
+        serde_yaml::to_string(&root).whatever_context("Failed to serialize YAML, this is a bug")?;
     std::fs::write(&yaml_path, yaml_str).with_whatever_context(|e| {
         format!("Failed to write YAML to {}, source: {:?}", yaml_path, e)
     })?;
-    
+
     Ok(())
 }
