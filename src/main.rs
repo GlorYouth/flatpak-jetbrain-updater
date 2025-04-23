@@ -9,9 +9,7 @@ mod utils;
 
 #[tokio::main]
 async fn main() -> error::Result<()> {
-    let product_info = resolve::ProductInfo::new_with_current_dir().whatever_context(
-        "Did not find a related jetbrains' product file in the current directory",
-    )?;
+    let product_info = resolve::ProductInfo::new_with_current_dir()?;
     let json = reqwest::get(format!(
         "https://data.services.jetbrains.com/products/releases?code={}&type=release",
         product_info.code()
@@ -39,8 +37,6 @@ async fn main() -> error::Result<()> {
 
     let xml_path = format!("com.jetbrains.{}.appdata.xml", product_info.name());
     update_xml(xml_path, &mut collection)?;
-
-    let yaml_path = format!("com.jetbrains.{}.yaml", product_info.name());
-    update_yaml(yaml_path, &product_info, &mut collection).await?;
+    update_yaml(&product_info, &mut collection).await?;
     Ok(())
 }

@@ -88,7 +88,7 @@ fn find_named_map<'a>(
                             .with_whatever_context(|| {
                                 format!("Failed to convert name in YAML, path: {}", yaml_path)
                             })
-                            .map(|name| name == product_info.short())
+                            .map(|name| name == product_info.short() || name == product_info.name())
                     })
                     .map(|matched| matched.then_some(mapping))
                     .transpose()
@@ -180,7 +180,6 @@ impl<'a> Platforms<'a> {
         product_release: &ProductRelease,
         yaml_path: &str,
     ) -> error::Result<()> {
-        
         use crate::resolve::Platform;
         let write = |map: &mut Mapping, platform: &Platform| -> error::Result<()> {
             if map.contains_key("size") {
@@ -200,13 +199,17 @@ impl<'a> Platforms<'a> {
             *map.get_mut_err("sha256", yaml_path)? = Value::String(_res.clone());
             Ok(())
         };
-        
-        write(&mut self.x86_64,&product_release.linux_amd64)?;
+
+        write(&mut self.x86_64, &product_release.linux_amd64)?;
 
         if let Some(aarch64) = &mut self.aarch64 {
-            write(aarch64,product_release.linux_arm64
-                .as_ref()
-                .whatever_context("Failed to find latest aarch64 in JSON")?)?;
+            write(
+                aarch64,
+                product_release
+                    .linux_arm64
+                    .as_ref()
+                    .whatever_context("Failed to find latest aarch64 in JSON")?,
+            )?;
         }
         Ok(())
     }
@@ -251,10 +254,11 @@ fn collect_platforms<'a>(
 }
 
 pub async fn update_yaml(
-    yaml_path: String,
     product_info: &ProductInfo,
     collection: &mut Vec<ProductRelease<'_>>,
 ) -> error::Result<()> {
+    let yaml_path = product_info.find_yaml_from_path().whatever_context("Failed to find YAML path")?;
+    
     let yaml = read_yaml(&yaml_path)?;
     let mut root = parse_yaml(yaml, &yaml_path)?;
     let modules = root.get_seq_mut("modules", &yaml_path)?;

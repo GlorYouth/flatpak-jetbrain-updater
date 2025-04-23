@@ -1,29 +1,46 @@
+use crate::error;
+use snafu::{whatever, OptionExt, ResultExt};
+
 pub struct ProductInfo {
+    paths: Vec<String>,
+
     short: String,
     name: String,
     lowercase: String,
     code: String,
 }
 
+type Pair<'a> = (&'a str, &'a str, &'a str, &'a str);
+
 impl ProductInfo {
+
     #[inline]
-    pub fn new_with_current_dir() -> Option<ProductInfo> {
-        let paths = std::fs::read_dir("./").unwrap();
-        for path in paths {
-            let file_name = path.unwrap().file_name().into_string().unwrap();
-            if let Some(info) = Self::from_name(&file_name) {
-                return Some(info);
-            }
-        }
-        None
+    pub fn new_with_current_dir() -> error::Result<ProductInfo> {
+        let mut paths_iter = std::fs::read_dir("./")
+            .with_whatever_context(|e| format!("Failed to read directory: {}", e))?
+            .into_iter();
+        let paths = paths_iter.try_fold(Vec::new(), |mut acc, path| {
+            let s = path
+                .with_whatever_context(|x| format!("Failed to read directory \"{}\"", x))
+                .and_then(|dir| {
+                    match dir.file_name().into_string() {
+                        Ok(s) => {Ok(s)}
+                        Err(e) => {
+                            whatever!("Failed to parse file: {:?}", e)
+                        }
+                    }
+                })?;
+            acc.push(s);
+            Ok(acc)
+        })?;
+        Self::from_lowcase_name(paths)
+            .whatever_context("Failed to find any jetbrains files in current directory")
     }
 
-    fn from_name(name: &str) -> Option<ProductInfo> {
-        // 先把输入转为小写，避免多次分配
-        let s = name.to_lowercase();
+    fn from_lowcase_name(paths: Vec<String>) -> Option<ProductInfo> {
 
         // 用静态数组维护关键词与其他参数的对应关系
-        const PAIRS: [(&str, &str, &str, &str); 5] = [
+        const PAIRS: [Pair; 5] = [
             ("clion", "clion", "CLion", "CL"),
             ("rustrover", "rustrover", "RustRover", "RR"),
             ("webstorm", "webstorm", "WebStorm", "WS"),
@@ -32,17 +49,28 @@ impl ProductInfo {
         ];
 
         // 迭代查找：一旦找到包含关键词的，就返回对应
-        PAIRS.into_iter().find_map(|(short, lc, name, code)| {
-            if s.contains(lc) {
-                Some(ProductInfo {
-                    short: short.to_string(),
-                    name: name.to_string(),
-                    lowercase: lc.to_string(),
-                    code: code.to_string(),
-                })
-            } else {
-                None
-            }
+        PAIRS
+            .into_iter()
+            .find(|(_, lc, _, _)| {
+                paths.iter().any(|p| p.to_lowercase().contains(lc))
+            })
+            .map(|(short, lc, name, code)| ProductInfo {
+                paths,
+
+                short: short.to_string(),
+                name: name.to_string(),
+                lowercase: lc.to_string(),
+                code: code.to_string(),
+            })
+    }
+    
+    #[inline]
+    pub fn find_yaml_from_path(&self) -> Option<String> {
+        let possible_paths = [format!("com.jetbrains.{}.yaml", self.name), format!("com.jetbrains.{}.yml", self.name)];
+        possible_paths.iter().find_map(|path| {
+            self.paths.iter().any(|s| {
+                s.eq(path)
+            }).then(|| path.to_string())
         })
     }
 
